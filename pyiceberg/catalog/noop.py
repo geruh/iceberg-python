@@ -33,6 +33,7 @@ from pyiceberg.table import (
 )
 from pyiceberg.table.sorting import UNSORTED_SORT_ORDER
 from pyiceberg.typedef import EMPTY_DICT, Identifier, Properties
+from pyiceberg.view import CommitViewRequest, CommitViewResponse, View
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -95,4 +96,10 @@ class NoopCatalog(Catalog):
     def update_namespace_properties(
         self, namespace: Union[str, Identifier], removals: Optional[Set[str]] = None, updates: Properties = EMPTY_DICT
     ) -> PropertiesUpdateSummary:
+        raise NotImplementedError
+
+    def load_view(self, identifier: Union[str, Identifier]) -> View:
+        raise NotImplementedError
+
+    def _commit_view(self, table_request: CommitViewRequest) -> CommitViewResponse:
         raise NotImplementedError

@@ -24,6 +24,7 @@ from typing import Callable
 from pyiceberg.io import InputFile, InputStream, OutputFile
 from pyiceberg.table.metadata import TableMetadata, TableMetadataUtil
 from pyiceberg.typedef import UTF8
+from pyiceberg.view.metadata import ViewMetadata, ViewMetadataWrapper
 
 GZIP = "gzip"
 
@@ -93,6 +94,22 @@ class FromByteStream:
 
         return TableMetadataUtil.parse_raw(metadata)
 
+    @staticmethod
+    def view_metadata(byte_stream: InputStream, encoding: str = UTF8, compression: Compressor = NOOP_COMPRESSOR) -> ViewMetadata:
+        """Instantiate a ViewMetadata object from a byte stream.
+
+        Args:
+            byte_stream: A file-like byte stream object.
+            encoding (default "utf-8"): The byte encoder to use for the reader.
+            compression: Optional compression method
+        """
+        with compression.stream_decompressor(byte_stream) as byte_stream:
+            reader = codecs.getreader(encoding)
+            json_bytes = reader(byte_stream)
+            metadata = json_bytes.read()
+
+        return ViewMetadataWrapper.model_validate_json(metadata).root
+
 
 class FromInputFile:
     """A collection of methods that deserialize InputFiles into Iceberg objects."""
@@ -121,6 +138,19 @@ class ToOutputFile:
     @staticmethod
     def table_metadata(metadata: TableMetadata, output_file: OutputFile, overwrite: bool = False) -> None:
         """Write a TableMetadata instance to an output file.
+
+        Args:
+            output_file (OutputFile): A custom implementation of the iceberg.io.file.OutputFile abstract base class.
+            overwrite (bool): Where to overwrite the file if it already exists. Defaults to `False`.
+        """
+        with output_file.create(overwrite=overwrite) as output_stream:
+            json_bytes = metadata.model_dump_json().encode(UTF8)
+            json_bytes = Compressor.get_compressor(output_file.location).bytes_compressor()(json_bytes)
+            output_stream.write(json_bytes)
+
+    @staticmethod
+    def view_metadata(metadata: ViewMetadata, output_file: OutputFile, overwrite: bool = False) -> None:
+        """Write a ViewMetadata instance to an output file.
 
         Args:
             output_file (OutputFile): A custom implementation of the iceberg.io.file.OutputFile abstract base class.

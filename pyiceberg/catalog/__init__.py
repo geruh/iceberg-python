@@ -56,6 +56,7 @@ from pyiceberg.typedef import (
     RecursiveDict,
 )
 from pyiceberg.utils.config import Config, merge_config
+from pyiceberg.view import CommitViewRequest, View, ViewMetadata
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -361,6 +362,23 @@ class Catalog(ABC):
         """
 
     @abstractmethod
+    def load_view(self, identifier: Union[str, Identifier]) -> View:
+        """Load the view's metadata and returns the table instance.
+
+        You can also use this method to check for table existence using 'try catalog.view() except NoSuchViewError'.
+        Note: This method doesn't scan data stored in the table.
+
+        Args:
+            identifier (str | Identifier): Table identifier.
+
+        Returns:
+            View: the view instance with its metadata.
+
+        Raises:
+            NoSuchViewError: If a view with the name does not exist.
+        """
+
+    @abstractmethod
     def register_table(self, identifier: Union[str, Identifier], metadata_location: str) -> Table:
         """Register a new table using existing metadata.
 
@@ -413,6 +431,22 @@ class Catalog(ABC):
 
         Raises:
             NoSuchTableError: If a table with the given identifier does not exist.
+            CommitFailedException: Requirement not met, or a conflict with a concurrent commit.
+            CommitStateUnknownException: Failed due to an internal exception on the side of the catalog.
+        """
+
+    @abstractmethod
+    def _commit_view(self, view_request: CommitViewRequest) -> CommitTableResponse:
+        """Update one or more tables.
+
+        Args:
+            table_request (CommitViewRequest): The view requests to be carried out.
+
+        Returns:
+            CommitViewResponse: The updated metadata.
+
+        Raises:
+            NoSuchViewError: If a table with the given identifier does not exist.
             CommitFailedException: Requirement not met, or a conflict with a concurrent commit.
             CommitStateUnknownException: Failed due to an internal exception on the side of the catalog.
         """
@@ -649,6 +683,10 @@ class Catalog(ABC):
     @staticmethod
     def _write_metadata(metadata: TableMetadata, io: FileIO, metadata_path: str) -> None:
         ToOutputFile.table_metadata(metadata, io.new_output(metadata_path))
+
+    @staticmethod
+    def _write_view_metadata(metadata: ViewMetadata, io: FileIO, metadata_path: str) -> None:
+        ToOutputFile.view_metadata(metadata, io.new_output(metadata_path))
 
     @staticmethod
     def _get_metadata_location(location: str, new_version: int = 0) -> str:

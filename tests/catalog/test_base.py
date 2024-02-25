@@ -15,7 +15,7 @@
 #  specific language governing permissions and limitations
 #  under the License.
 # pylint:disable=redefined-outer-name
-
+from datetime import datetime
 from typing import (
     Dict,
     List,
@@ -23,6 +23,7 @@ from typing import (
     Set,
     Union,
 )
+from uuid import uuid4
 
 import pyarrow as pa
 import pytest
@@ -39,7 +40,9 @@ from pyiceberg.exceptions import (
     NamespaceNotEmptyError,
     NoSuchNamespaceError,
     NoSuchTableError,
+    NoSuchViewError,
     TableAlreadyExistsError,
+    ViewAlreadyExistsError,
 )
 from pyiceberg.io import load_file_io
 from pyiceberg.partitioning import UNPARTITIONED_PARTITION_SPEC, PartitionField, PartitionSpec
@@ -58,6 +61,9 @@ from pyiceberg.table.sorting import UNSORTED_SORT_ORDER, SortOrder
 from pyiceberg.transforms import IdentityTransform
 from pyiceberg.typedef import EMPTY_DICT
 from pyiceberg.types import IntegerType, LongType, NestedField
+from pyiceberg.utils.datetime import datetime_to_millis
+from pyiceberg.view import CommitViewRequest, CommitViewResponse, View, ViewMetadata, ViewVersion
+from pyiceberg.view.metadata import SQLViewRepresentation, ViewHistoryEntry
 
 
 class InMemoryCatalog(Catalog):
@@ -65,11 +71,13 @@ class InMemoryCatalog(Catalog):
 
     __tables: Dict[Identifier, Table]
     __namespaces: Dict[Identifier, Properties]
+    __views: Dict[Identifier, View]
 
     def __init__(self, name: str, **properties: str) -> None:
         super().__init__(name, **properties)
         self.__tables = {}
         self.__namespaces = {}
+        self.__views = {}
 
     def create_table(
         self,
@@ -253,6 +261,82 @@ class InMemoryCatalog(Catalog):
             removed=list(removed or []), updated=list(updates.keys() if updates else []), missing=list(expected_to_change)
         )
 
+    def _commit_view(self, view_request: CommitViewRequest) -> CommitViewResponse:
+        pass
+
+    def create_view(
+        self,
+        identifier: Union[str, Identifier],
+        schema: Schema,
+        default_namespace: Namespace,
+        representations: List[SQLViewRepresentation],
+        properties: dict,
+        location: Optional[str] = None,
+        default_catalog: Optional[str] = None,
+    ) -> View:
+        identifier = Catalog.identifier_to_tuple(identifier)
+        namespace = Catalog.namespace_from(identifier)
+
+        if identifier in self.__views:
+            raise ViewAlreadyExistsError(f"View already exists: {identifier}")
+        if namespace not in self.__namespaces:
+            self.__namespaces[namespace] = {}
+
+        schema: Schema = self._convert_schema_if_needed(schema)
+        new_location = location or f's3://warehouse/{"/".join(identifier)}/data'
+        time = datetime_to_millis(datetime.now().astimezone())
+
+        view_version = ViewVersion(
+            version_id=1,
+            timestamp_millis=time,
+            summary={},
+            representations=representations,
+            schema_id=0,
+            default_namespace=default_namespace,
+            default_catalog=default_catalog,
+        )
+
+        history = ViewHistoryEntry(timestamp_millis=time, version_id=1)
+
+        view_metadata = ViewMetadata(
+            location=location,
+            view_uuid=uuid4(),
+            schemas=[schema],
+            current_version_id=1,
+            versions=[view_version],
+            history=[history],
+            properties=properties,
+        )
+
+        view = View(
+            identifier=identifier, metadata=view_metadata, metadata_location=new_location, io=load_file_io(), catalog=self
+        )
+        self.__views[identifier] = view
+        return view
+
+    def load_view(self, identifier: Union[str, Identifier]) -> View:
+        identifier = self.identifier_to_tuple_without_catalog(identifier)
+        try:
+            return self.__views[identifier]
+        except KeyError as error:
+            raise NoSuchViewError(f"View does not exist: {identifier}") from error
+
+    def list_views(self, namespace: Optional[Union[str, Identifier]] = None) -> List[Identifier]:
+        if namespace:
+            namespace = Catalog.identifier_to_tuple(namespace)
+            list_views = [table_identifier for table_identifier in self.__views.keys() if namespace == table_identifier[:-1]]
+        else:
+            list_views = list(self.__views.keys())
+
+        return list_views
+
+    def drop_view(self, identifier: Union[str, Identifier]) -> None:
+        identifier = self.identifier_to_tuple_without_catalog(identifier)
+        try:
+            self.__views.pop(identifier)
+        except KeyError as error:
+            raise NoSuchViewError(f"View does not exist: {identifier}") from error
+
 
 @pytest.fixture
 def catalog() -> InMemoryCatalog:
@@ -260,6 +344,7 @@ def catalog() -> InMemoryCatalog:
 
 
 TEST_TABLE_IDENTIFIER = ("com", "organization", "department", "my_table")
+TEST_VIEW_IDENTIFIER = ("com", "organization", "department", "my_view")
 TEST_TABLE_NAMESPACE = ("com", "organization", "department")
 TEST_TABLE_NAME = "my_table"
 TEST_TABLE_SCHEMA = Schema(
@@ -332,6 +417,22 @@ def test_create_table(catalog: InMemoryCatalog) -> None:
         properties=TEST_TABLE_PROPERTIES,
     )
     assert catalog.load_table(TEST_TABLE_IDENTIFIER) == table
+
+
+def test_create_view(catalog: InMemoryCatalog) -> None:
+    view = catalog.create_view(
+        identifier=TEST_VIEW_IDENTIFIER,
+        schema=TEST_TABLE_SCHEMA,
+        default_namespace=Namespace(list(TEST_TABLE_NAMESPACE)),
+        representations=[
+            SQLViewRepresentation(type="sql", sql="SELECT * FROM table_spark", dialect="spark"),
+            SQLViewRepresentation(type="sql", sql="SELECT * FROM table_trino", dialect="trino"),
+        ],
+        properties={"prop1": "val1", "prop2": "val2"},
+        location="/path/to/view/location",
+        default_catalog="default_catalog_name",
+    )
+    assert catalog.load_view(TEST_VIEW_IDENTIFIER) == view
 
 
 @pytest.mark.parametrize(

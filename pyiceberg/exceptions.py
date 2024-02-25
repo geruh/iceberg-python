@@ -110,3 +110,11 @@ class CommitFailedException(Exception):
 
 class CommitStateUnknownException(RESTError):
     """Commit failed due to unknown reason."""
+
+
+class ViewAlreadyExistsError(Exception):
+    """Raised when creating a view with a name that already exists."""
+
+
+class NoSuchViewError(Exception):
+    """Raises when the view can't be found in the REST catalog."""

@@ -83,6 +83,7 @@ from pyiceberg.types import (
     StructType,
 )
 from pyiceberg.utils.datetime import datetime_to_millis
+from pyiceberg.view import View, ViewMetadata
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -1962,3 +1963,57 @@ def table_v2(example_table_metadata_v2: Dict[str, Any]) -> Table:
 @pytest.fixture
 def bound_reference_str() -> BoundReference[str]:
     return BoundReference(field=NestedField(1, "field", StringType(), required=False), accessor=Accessor(position=0, inner=None))
+
+
+EXAMPLE_VIEW_METADATA: Dict[str, Any] = {
+    "view-uuid": "fa6506c3-7681-40c8-86dc-e36561f83385",
+    "format-version": 1,
+    "location": "s3://warehouse/default.db/event_agg",
+    "current-version-id": 1,
+    "properties": {"comment": "Daily event counts"},
+    "versions": [
+        {
+            "version-id": 1,
+            "timestamp-ms": 1573518431292,
+            "schema-id": 1,
+            "default-catalog": "prod",
+            "default-namespace": ["default"],
+            "summary": {"engine-name": "Spark", "engineVersion": "3.3.2"},
+            "representations": [
+                {
+                    "type": "sql",
+                    "sql": "SELECT\n    COUNT(1), CAST(event_ts AS DATE)\nFROM events\nGROUP BY 2",
+                    "dialect": "spark",
+                }
+            ],
+        }
+    ],
+    "schemas": [
+        {
+            "schema-id": 1,
+            "type": "struct",
+            "fields": [
+                {"id": 1, "name": "event_count", "required": False, "type": "int", "doc": "Count of events"},
+                {"id": 2, "name": "event_date", "required": False, "type": "date"},
+            ],
+        }
+    ],
+    "version-log": [{"timestamp-ms": 1573518431292, "version-id": 1}],
+}
+
+
+@pytest.fixture
+def example_view_metadata() -> Dict[str, Any]:
+    return EXAMPLE_VIEW_METADATA
+
+
+@pytest.fixture
+def view(example_view_metadata: Dict[str, Any]) -> View:
+    view_metadata = ViewMetadata(**example_view_metadata)
+    return View(
+        identifier=("database", "view"),
+        metadata=view_metadata,
+        metadata_location=f"{view_metadata.location}/uuid.metadata.json",
+        io=load_file_io(),
+        catalog=NoopCatalog("NoopCatalog"),
+    )
