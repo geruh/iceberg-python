@@ -104,6 +104,19 @@ You can also set the FileIO explicitly:
 
 For the FileIO there are several configuration options available:
 
+### PyArrow FileIO Pass-through Properties
+
+When using `PyArrowFileIO`, any properties with filesystem specific prefixes that are not explicitly handled by PyIceberg can be passed through to the underlying PyArrow filesystem implementations.
+
+<!-- markdown-link-check-disable -->
+
+| Prefix  | FileSystem                                                                                          | Example                 | Description                                    |
+|---------|-----------------------------------------------------------------------------------------------------|-------------------------|------------------------------------------------|
+| `s3.`   | [S3FileSystem](https://arrow.apache.org/docs/python/generated/pyarrow.fs.S3FileSystem.html)         | `s3.load_frequency=900` | Passed as `load_frequency=900` to S3FileSystem |
+| `hdfs.` | [HadoopFileSystem](https://arrow.apache.org/docs/python/generated/pyarrow.fs.HadoopFileSystem.html) | `hdfs.replication=3`    | Passed as `replication=3` to HadoopFileSystem  |
+| `gcs.`  | [GcsFileSystem](https://arrow.apache.org/docs/python/generated/pyarrow.fs.GcsFileSystem.html)       | `gcs.project_id='test'` | Passed as `project_id='test'` to GcsFileSystem |
+| `file.` | [LocalFileSystem](https://arrow.apache.org/docs/python/generated/pyarrow.fs.LocalFileSystem.html)   | `file.use_mmap=true`    | Passed as `use_mmap=true` to LocalFileSystem   |
+
 ### S3
 
 <!-- markdown-link-check-disable -->

@@ -423,6 +423,14 @@ class PyArrowFileIO(FileIO):
         if force_virtual_addressing := self.properties.get(S3_FORCE_VIRTUAL_ADDRESSING):
             client_kwargs["force_virtual_addressing"] = property_as_bool(self.properties, force_virtual_addressing, False)
 
+        # Pass through any additional oss properties that aren't explicitly handled above
+        for key, value in self.properties.items():
+            if key.startswith("s3."):
+                # Remove s3. prefix for the kwargs
+                param_name = key[3:]
+                if param_name not in client_kwargs:
+                    client_kwargs[param_name] = value
+
         return S3FileSystem(**client_kwargs)
 
     def _initialize_s3_fs(self, netloc: Optional[str]) -> FileSystem:
@@ -469,6 +477,14 @@ class PyArrowFileIO(FileIO):
         if force_virtual_addressing := self.properties.get(S3_FORCE_VIRTUAL_ADDRESSING):
             client_kwargs["force_virtual_addressing"] = property_as_bool(self.properties, force_virtual_addressing, False)
 
+        # Pass through any additional s3 properties that aren't explicitly handled above
+        for key, value in self.properties.items():
+            if key.startswith("s3."):
+                # Remove s3. prefix for the kwargs
+                param_name = key[3:]
+                if param_name not in client_kwargs:
+                    client_kwargs[param_name] = value
+
         return S3FileSystem(**client_kwargs)
 
     def _initialize_hdfs_fs(self, scheme: str, netloc: Optional[str]) -> FileSystem:
@@ -487,6 +503,14 @@ class PyArrowFileIO(FileIO):
         if kerb_ticket := self.properties.get(HDFS_KERB_TICKET):
             hdfs_kwargs["kerb_ticket"] = kerb_ticket
 
+        # Pass through any additional hdfs properties that aren't explicitly handled above
+        for key, value in self.properties.items():
+            if key.startswith("hdfs."):
+                # Remove hdfs. prefix for the kwargs
+                param_name = key[5:]
+                if param_name not in hdfs_kwargs:
+                    hdfs_kwargs[param_name] = value
+
         return HadoopFileSystem(**hdfs_kwargs)
 
     def _initialize_gcs_fs(self) -> FileSystem:
@@ -504,10 +528,26 @@ class PyArrowFileIO(FileIO):
             gcs_kwargs["scheme"] = url_parts.scheme
             gcs_kwargs["endpoint_override"] = url_parts.netloc
 
+        # Pass through any additional gcs properties that aren't explicitly handled above
+        for key, value in self.properties.items():
+            if key.startswith("gcs."):
+                # Remove gcs. prefix for the kwargs
+                param_name = key[4:]
+                if param_name not in gcs_kwargs:
+                    gcs_kwargs[param_name] = value
         return GcsFileSystem(**gcs_kwargs)
 
     def _initialize_local_fs(self) -> FileSystem:
-        return PyArrowLocalFileSystem()
+        local_kwargs: Dict[str, Any] = {}
+
+        # Pass through any additional file properties that aren't explicitly handled above
+        for key, value in self.properties.items():
+            if key.startswith("file."):
+                # Remove file. prefix for the kwargs
+                param_name = key[5:]
+                local_kwargs[param_name] = value
+
+        return PyArrowLocalFileSystem(**local_kwargs)
 
     def new_input(self, location: str) -> PyArrowFile:
         """Get a PyArrowFile instance to read bytes from the file at the given location.
