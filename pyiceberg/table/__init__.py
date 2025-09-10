@@ -41,7 +41,6 @@ from typing import (
 )
 
 from pydantic import Field
-from sortedcontainers import SortedList
 
 import pyiceberg.expressions.parser as parser
 from pyiceberg.expressions import (
@@ -64,7 +63,6 @@ from pyiceberg.expressions.visitors import (
 )
 from pyiceberg.io import FileIO, load_file_io
 from pyiceberg.manifest import (
-    POSITIONAL_DELETE_SCHEMA,
     DataFile,
     DataFileContent,
     ManifestContent,
@@ -78,8 +76,10 @@ from pyiceberg.partitioning import (
     PartitionSpec,
 )
 from pyiceberg.schema import Schema
+from pyiceberg.table.delete_file_index import DeleteFileIndex
 from pyiceberg.table.inspect import InspectTable
 from pyiceberg.table.locations import LocationProvider, load_location_provider
+from pyiceberg.table.maintenance import MaintenanceTable
 from pyiceberg.table.metadata import (
     INITIAL_SEQUENCE_NUMBER,
     TableMetadata,
@@ -115,7 +115,7 @@ from pyiceberg.table.update import (
     update_table_metadata,
 )
 from pyiceberg.table.update.schema import UpdateSchema
-from pyiceberg.table.update.snapshot import ExpireSnapshots, ManageSnapshots, UpdateSnapshot, _FastAppendFiles
+from pyiceberg.table.update.snapshot import ManageSnapshots, UpdateSnapshot, _FastAppendFiles
 from pyiceberg.table.update.spec import UpdateSpec
 from pyiceberg.table.update.statistics import UpdateStatistics
 from pyiceberg.transforms import IdentityTransform
@@ -219,7 +219,7 @@ class TableProperties:
 
     DEFAULT_NAME_MAPPING = "schema.name-mapping.default"
     FORMAT_VERSION = "format-version"
-    DEFAULT_FORMAT_VERSION = 2
+    DEFAULT_FORMAT_VERSION: TableVersion = 2
 
     MANIFEST_TARGET_SIZE_BYTES = "commit.manifest.target-size-bytes"
     MANIFEST_TARGET_SIZE_BYTES_DEFAULT = 8 * 1024 * 1024  # 8 MB
@@ -292,8 +292,6 @@ class Transaction:
 
         if self._autocommit:
             self.commit_transaction()
-            self._updates = ()
-            self._requirements = ()
 
         return self
 
@@ -399,7 +397,9 @@ class Transaction:
             expr = Or(expr, match_partition_expression)
         return expr
 
-    def _append_snapshot_producer(self, snapshot_properties: Dict[str, str], branch: Optional[str]) -> _FastAppendFiles:
+    def _append_snapshot_producer(
+        self, snapshot_properties: Dict[str, str], branch: Optional[str] = MAIN_BRANCH
+    ) -> _FastAppendFiles:
         """Determine the append type based on table properties.
 
         Args:
@@ -432,15 +432,14 @@ class Transaction:
             name_mapping=self.table_metadata.name_mapping(),
         )
 
-    def update_snapshot(self, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = None) -> UpdateSnapshot:
+    def update_snapshot(
+        self, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = MAIN_BRANCH
+    ) -> UpdateSnapshot:
         """Create a new UpdateSnapshot to produce a new snapshot for the table.
 
         Returns:
             A new UpdateSnapshot
         """
-        if branch is None:
-            branch = MAIN_BRANCH
-
         return UpdateSnapshot(self, io=self._table.io, branch=branch, snapshot_properties=snapshot_properties)
 
     def update_statistics(self) -> UpdateStatistics:
@@ -452,7 +451,7 @@ class Transaction:
         """
         return UpdateStatistics(transaction=self)
 
-    def append(self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = None) -> None:
+    def append(self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = MAIN_BRANCH) -> None:
         """
         Shorthand API for appending a PyArrow table to a table transaction.
 
@@ -471,15 +470,12 @@ class Transaction:
         if not isinstance(df, pa.Table):
             raise ValueError(f"Expected PyArrow table, got: {df}")
 
-        if unsupported_partitions := [
-            field for field in self.table_metadata.spec().fields if not field.transform.supports_pyarrow_transform
-        ]:
-            raise ValueError(
-                f"Not all partition types are supported for writes. Following partitions cannot be written using pyarrow: {unsupported_partitions}."
-            )
         downcast_ns_timestamp_to_us = Config().get_bool(DOWNCAST_NS_TIMESTAMP_TO_US_ON_WRITE) or False
         _check_pyarrow_schema_compatible(
-            self.table_metadata.schema(), provided_schema=df.schema, downcast_ns_timestamp_to_us=downcast_ns_timestamp_to_us
+            self.table_metadata.schema(),
+            provided_schema=df.schema,
+            downcast_ns_timestamp_to_us=downcast_ns_timestamp_to_us,
+            format_version=self.table_metadata.format_version,
         )
 
         with self._append_snapshot_producer(snapshot_properties, branch=branch) as append_files:
@@ -494,7 +490,7 @@ class Transaction:
                     append_files.append_data_file(data_file)
 
     def dynamic_partition_overwrite(
-        self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = None
+        self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = MAIN_BRANCH
     ) -> None:
         """
         Shorthand for overwriting existing partitions with a PyArrow table.
@@ -529,7 +525,10 @@ class Transaction:
 
         downcast_ns_timestamp_to_us = Config().get_bool(DOWNCAST_NS_TIMESTAMP_TO_US_ON_WRITE) or False
         _check_pyarrow_schema_compatible(
-            self.table_metadata.schema(), provided_schema=df.schema, downcast_ns_timestamp_to_us=downcast_ns_timestamp_to_us
+            self.table_metadata.schema(),
+            provided_schema=df.schema,
+            downcast_ns_timestamp_to_us=downcast_ns_timestamp_to_us,
+            format_version=self.table_metadata.format_version,
         )
 
         # If dataframe does not have data, there is no need to overwrite
@@ -558,7 +557,7 @@ class Transaction:
         overwrite_filter: Union[BooleanExpression, str] = ALWAYS_TRUE,
         snapshot_properties: Dict[str, str] = EMPTY_DICT,
         case_sensitive: bool = True,
-        branch: Optional[str] = None,
+        branch: Optional[str] = MAIN_BRANCH,
     ) -> None:
         """
         Shorthand for adding a table overwrite with a PyArrow table to the transaction.
@@ -587,15 +586,12 @@ class Transaction:
         if not isinstance(df, pa.Table):
             raise ValueError(f"Expected PyArrow table, got: {df}")
 
-        if unsupported_partitions := [
-            field for field in self.table_metadata.spec().fields if not field.transform.supports_pyarrow_transform
-        ]:
-            raise ValueError(
-                f"Not all partition types are supported for writes. Following partitions cannot be written using pyarrow: {unsupported_partitions}."
-            )
         downcast_ns_timestamp_to_us = Config().get_bool(DOWNCAST_NS_TIMESTAMP_TO_US_ON_WRITE) or False
         _check_pyarrow_schema_compatible(
-            self.table_metadata.schema(), provided_schema=df.schema, downcast_ns_timestamp_to_us=downcast_ns_timestamp_to_us
+            self.table_metadata.schema(),
+            provided_schema=df.schema,
+            downcast_ns_timestamp_to_us=downcast_ns_timestamp_to_us,
+            format_version=self.table_metadata.format_version,
         )
 
         if overwrite_filter != AlwaysFalse():
@@ -621,7 +617,7 @@ class Transaction:
         delete_filter: Union[str, BooleanExpression],
         snapshot_properties: Dict[str, str] = EMPTY_DICT,
         case_sensitive: bool = True,
-        branch: Optional[str] = None,
+        branch: Optional[str] = MAIN_BRANCH,
     ) -> None:
         """
         Shorthand for deleting record from a table.
@@ -724,7 +720,7 @@ class Transaction:
         when_matched_update_all: bool = True,
         when_not_matched_insert_all: bool = True,
         case_sensitive: bool = True,
-        branch: Optional[str] = None,
+        branch: Optional[str] = MAIN_BRANCH,
     ) -> UpsertResult:
         """Shorthand API for performing an upsert to an iceberg table.
 
@@ -791,7 +787,10 @@ class Transaction:
 
         downcast_ns_timestamp_to_us = Config().get_bool(DOWNCAST_NS_TIMESTAMP_TO_US_ON_WRITE) or False
         _check_pyarrow_schema_compatible(
-            self.table_metadata.schema(), provided_schema=df.schema, downcast_ns_timestamp_to_us=downcast_ns_timestamp_to_us
+            self.table_metadata.schema(),
+            provided_schema=df.schema,
+            downcast_ns_timestamp_to_us=downcast_ns_timestamp_to_us,
+            format_version=self.table_metadata.format_version,
         )
 
         # get list of rows that exist so we don't have to load the entire target table
@@ -806,7 +805,7 @@ class Transaction:
             case_sensitive=case_sensitive,
         )
 
-        if branch is not None:
+        if branch in self.table_metadata.refs:
             matched_iceberg_record_batches_scan = matched_iceberg_record_batches_scan.use_ref(branch)
 
         matched_iceberg_record_batches = matched_iceberg_record_batches_scan.to_arrow_batch_reader()
@@ -937,13 +936,15 @@ class Transaction:
                 updates=self._updates,
                 requirements=self._requirements,
             )
-            return self._table
-        else:
-            return self._table
+
+        self._updates = ()
+        self._requirements = ()
+
+        return self._table
 
 
 class CreateTableTransaction(Transaction):
-    """A transaction that involves the creation of a a new table."""
+    """A transaction that involves the creation of a new table."""
 
     def _initial_changes(self, table_metadata: TableMetadata) -> None:
         """Set the initial changes that can reconstruct the initial table metadata when creating the CreateTableTransaction."""
@@ -954,7 +955,7 @@ class CreateTableTransaction(Transaction):
 
         schema: Schema = table_metadata.schema()
         self._updates += (
-            AddSchemaUpdate(schema_=schema, last_column_id=schema.highest_field_id),
+            AddSchemaUpdate(schema_=schema),
             SetCurrentSchemaUpdate(schema_id=-1),
         )
 
@@ -988,11 +989,15 @@ class CreateTableTransaction(Transaction):
         Returns:
             The table with the updates applied.
         """
-        self._requirements = (AssertCreate(),)
-        self._table._do_commit(  # pylint: disable=W0212
-            updates=self._updates,
-            requirements=self._requirements,
-        )
+        if len(self._updates) > 0:
+            self._table._do_commit(  # pylint: disable=W0212
+                updates=self._updates,
+                requirements=(AssertCreate(),),
+            )
+
+        self._updates = ()
+        self._requirements = ()
+
         return self._table
 
 
@@ -1069,6 +1074,15 @@ class Table:
             InspectTable object based on this Table.
         """
         return InspectTable(self)
+
+    @property
+    def maintenance(self) -> MaintenanceTable:
+        """Return the MaintenanceTable object for maintenance.
+
+        Returns:
+            MaintenanceTable object based on this Table.
+        """
+        return MaintenanceTable(self)
 
     def refresh(self) -> Table:
         """Refresh the current table metadata.
@@ -1242,10 +1256,6 @@ class Table:
         """
         return ManageSnapshots(transaction=Transaction(self, autocommit=True))
 
-    def expire_snapshots(self) -> ExpireSnapshots:
-        """Shorthand to run expire snapshots by id or by a timestamp."""
-        return ExpireSnapshots(transaction=Transaction(self, autocommit=True))
-
     def update_statistics(self) -> UpdateStatistics:
         """
         Shorthand to run statistics management operations like add statistics and remove statistics.
@@ -1291,7 +1301,7 @@ class Table:
         when_matched_update_all: bool = True,
         when_not_matched_insert_all: bool = True,
         case_sensitive: bool = True,
-        branch: Optional[str] = None,
+        branch: Optional[str] = MAIN_BRANCH,
     ) -> UpsertResult:
         """Shorthand API for performing an upsert to an iceberg table.
 
@@ -1338,7 +1348,7 @@ class Table:
                 branch=branch,
             )
 
-    def append(self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = None) -> None:
+    def append(self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = MAIN_BRANCH) -> None:
         """
         Shorthand API for appending a PyArrow table to the table.
 
@@ -1351,7 +1361,7 @@ class Table:
             tx.append(df=df, snapshot_properties=snapshot_properties, branch=branch)
 
     def dynamic_partition_overwrite(
-        self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = None
+        self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT, branch: Optional[str] = MAIN_BRANCH
     ) -> None:
         """Shorthand for dynamic overwriting the table with a PyArrow table.
 
@@ -1370,7 +1380,7 @@ class Table:
         overwrite_filter: Union[BooleanExpression, str] = ALWAYS_TRUE,
         snapshot_properties: Dict[str, str] = EMPTY_DICT,
         case_sensitive: bool = True,
-        branch: Optional[str] = None,
+        branch: Optional[str] = MAIN_BRANCH,
     ) -> None:
         """
         Shorthand for overwriting the table with a PyArrow table.
@@ -1403,7 +1413,7 @@ class Table:
         delete_filter: Union[BooleanExpression, str] = ALWAYS_TRUE,
         snapshot_properties: Dict[str, str] = EMPTY_DICT,
         case_sensitive: bool = True,
-        branch: Optional[str] = None,
+        branch: Optional[str] = MAIN_BRANCH,
     ) -> None:
         """
         Shorthand for deleting rows from the table.
@@ -1793,29 +1803,20 @@ def _min_sequence_number(manifests: List[ManifestFile]) -> int:
         return INITIAL_SEQUENCE_NUMBER
 
 
-def _match_deletes_to_data_file(data_entry: ManifestEntry, positional_delete_entries: SortedList[ManifestEntry]) -> Set[DataFile]:
-    """Check if the delete file is relevant for the data file.
-
-    Using the column metrics to see if the filename is in the lower and upper bound.
+def _match_deletes_to_data_file(data_entry: ManifestEntry, delete_file_index: DeleteFileIndex) -> Set[DataFile]:
+    """Check if delete files are relevant for the data file.
 
     Args:
-        data_entry (ManifestEntry): The manifest entry path of the datafile.
-        positional_delete_entries (List[ManifestEntry]): All the candidate positional deletes manifest entries.
+        data_entry (ManifestEntry): The manifest entry of the data file.
+        delete_file_index (DeleteFileIndex): Index containing all delete files.
 
     Returns:
-        A set of files that are relevant for the data file.
+        A set of delete files that are relevant for the data file.
     """
-    relevant_entries = positional_delete_entries[positional_delete_entries.bisect_right(data_entry) :]
-
-    if len(relevant_entries) > 0:
-        evaluator = _InclusiveMetricsEvaluator(POSITIONAL_DELETE_SCHEMA, EqualTo("file_path", data_entry.data_file.file_path))
-        return {
-            positional_delete_entry.data_file
-            for positional_delete_entry in relevant_entries
-            if evaluator.eval(positional_delete_entry.data_file)
-        }
-    else:
-        return set()
+    candidate_deletes = delete_file_index.for_data_file(
+        data_entry.sequence_number or 0, data_entry.data_file, partition_key=data_entry.data_file.partition
+    )
+    return set(candidate_deletes)
 
 
 class DataScan(TableScan):
@@ -1921,7 +1922,7 @@ class DataScan(TableScan):
         min_sequence_number = _min_sequence_number(manifests)
 
         data_entries: List[ManifestEntry] = []
-        positional_delete_entries = SortedList(key=lambda entry: entry.sequence_number or INITIAL_SEQUENCE_NUMBER)
+        delete_file_index = DeleteFileIndex(self.table_metadata.schema(), self.table_metadata.specs())
 
         executor = ExecutorFactory.get_or_create()
         for manifest_entry in chain(
@@ -1942,19 +1943,16 @@ class DataScan(TableScan):
             data_file = manifest_entry.data_file
             if data_file.content == DataFileContent.DATA:
                 data_entries.append(manifest_entry)
-            elif data_file.content == DataFileContent.POSITION_DELETES:
-                positional_delete_entries.add(manifest_entry)
-            elif data_file.content == DataFileContent.EQUALITY_DELETES:
-                raise ValueError("PyIceberg does not yet support equality deletes: https://github.com/apache/iceberg/issues/6568")
+            elif data_file.content in (DataFileContent.POSITION_DELETES, DataFileContent.EQUALITY_DELETES):
+                delete_file_index.add_delete_file(manifest_entry, partition_key=data_file.partition)
             else:
                 raise ValueError(f"Unknown DataFileContent ({data_file.content}): {manifest_entry}")
-
         return [
             FileScanTask(
                 data_entry.data_file,
                 delete_files=_match_deletes_to_data_file(
                     data_entry,
-                    positional_delete_entries,
+                    delete_file_index,
                 ),
                 residual=residual_evaluators[data_entry.data_file.spec_id](data_entry.data_file).residual_for(
                     data_entry.data_file.partition
@@ -2090,14 +2088,6 @@ class WriteTask:
         # Mimics the behavior in the Java API:
         # https://github.com/apache/iceberg/blob/a582968975dd30ff4917fbbe999f1be903efac02/core/src/main/java/org/apache/iceberg/io/OutputFileFactory.java#L92-L101
         return f"00000-{self.task_id}-{self.write_uuid}.{extension}"
-
-
-@dataclass(frozen=True)
-class AddFileTask:
-    """Task with the parameters for adding a Parquet file as a DataFile."""
-
-    file_path: str
-    partition_field_value: Record
 
 
 def _parquet_files_to_data_files(table_metadata: TableMetadata, file_paths: List[str], io: FileIO) -> Iterable[DataFile]:
