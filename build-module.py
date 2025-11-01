@@ -27,6 +27,7 @@ def build_cython_extensions() -> None:
     from Cython.Build import build_ext, cythonize
     from setuptools import Extension
     from setuptools.dist import Distribution
+    import sys
 
     Cython.Compiler.Options.annotate = True
 
@@ -38,6 +39,11 @@ def build_cython_extensions() -> None:
         extra_compile_args = [
             "-O3",
         ]
+
+    no_gil = hasattr(sys, "_is_gil_enabled") and not sys._is_gil_enabled()
+
+    if no_gil:
+        extra_compile_args.append("-DPy_GIL_DISABLED")  # required for 3.14
 
     package_path = "pyiceberg"
 
