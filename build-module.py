@@ -18,11 +18,17 @@
 import os
 import shutil
 from pathlib import Path
+from sysconfig import get_config_var
 
 allowed_to_fail = os.environ.get("CIBUILDWHEEL", "0") != "1"
+is_free_threaded = bool(get_config_var("Py_GIL_DISABLED"))
 
 
 def build_cython_extensions() -> None:
+    if is_free_threaded:
+        # Free-threaded Python (PEP 703) runs without the legacy GIL, so fall back to pure-Python.
+        return
+
     import Cython.Compiler.Options
     from Cython.Build import build_ext, cythonize
     from setuptools import Extension
@@ -42,7 +48,6 @@ def build_cython_extensions() -> None:
     package_path = "pyiceberg"
 
     extension = Extension(
-        # Your .pyx file will be available to cpython at this location.
         name="pyiceberg.avro.decoder_fast",
         sources=[
             os.path.join(package_path, "avro", "decoder_fast.pyx"),
@@ -51,7 +56,12 @@ def build_cython_extensions() -> None:
         language="c",
     )
 
-    ext_modules = cythonize([extension], include_path=list(package_path), language_level=3, annotate=True)
+    ext_modules = cythonize(
+        [extension],
+        include_path=[package_path],
+        language_level=3,
+        annotate=True,
+    )
     dist = Distribution({"ext_modules": ext_modules})
     cmd = build_ext(dist)
     cmd.ensure_finalized()
