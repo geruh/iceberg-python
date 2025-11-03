@@ -16,26 +16,26 @@
 # under the License.
 
 import os
-from setuptools import setup, Extension
 
-# Check if we're in cibuildwheel - if so, Cython is required
-in_cibuildwheel = os.environ.get("CIBUILDWHEEL", "0") == "1"
+from setuptools import Extension, find_packages, setup
+
+allowed_to_fail = os.environ.get("CIBUILDWHEEL", "0") != "1"
+
+ext_modules = []
 
 try:
     import Cython.Compiler.Options
     from Cython.Build import cythonize
-    
-    # Enable annotation for Cython (generates .html files for analysis)
+
     Cython.Compiler.Options.annotate = True
-    
-    # Determine compiler flags based on platform
+
     if os.name == "nt":  # Windows
         extra_compile_args = ["/O2"]
     else:  # UNIX-based systems (Linux, macOS)
         extra_compile_args = ["-O3"]
-    
+
     package_path = "pyiceberg"
-    
+
     extensions = [
         Extension(
             "pyiceberg.avro.decoder_fast",
@@ -44,23 +44,29 @@ try:
             language="c",
         )
     ]
-    
-    # Cythonize with the same options as the old build-module.py
+
     ext_modules = cythonize(
         extensions,
-        include_path=[package_path],  # Match old include_path
+        include_path=[package_path],
         compiler_directives={"language_level": "3"},
         annotate=True,
     )
-    
-except ImportError:
-    if in_cibuildwheel:
-        # In cibuildwheel, Cython is required
+except Exception:
+    if not allowed_to_fail:
         raise
-    # If Cython is not available and we're not in cibuildwheel,
-    # build without extensions (matches allowed_to_fail logic)
-    ext_modules = []
+
+pyiceberg_packages = find_packages(include=["pyiceberg*"])
+vendor_packages = find_packages(where="vendor", include=["fb303", "hive_metastore"])
+
+packages = pyiceberg_packages + vendor_packages
 
 setup(
+    packages=packages,
+    package_dir={
+        "": ".",
+        "fb303": "vendor/fb303",
+        "hive_metastore": "vendor/hive_metastore",
+    },
+    include_package_data=True,
     ext_modules=ext_modules,
 )

@@ -15,18 +15,26 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from __future__ import annotations
+
 import os
 import shutil
 from pathlib import Path
+from sysconfig import get_config_var
 from typing import Any
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 allowed_to_fail = os.environ.get("CIBUILDWHEEL", "0") != "1"
+is_free_threaded = bool(get_config_var("Py_GIL_DISABLED"))
 
 
 class BuildHook(BuildHookInterface):
-    def build_cython_extensions(self) -> None:
+    def build_cython_extensions(self) -> list[Path]:
+        if is_free_threaded:
+            # Skip compiling native extensions on experimental free-threaded builds (PEP 703).
+            return []
+
         import Cython.Compiler.Options
         from Cython.Build import build_ext, cythonize
         from setuptools import Extension
@@ -35,22 +43,15 @@ class BuildHook(BuildHookInterface):
         Cython.Compiler.Options.annotate = True
 
         if os.name == "nt":  # Windows
-            extra_compile_args = [
-                "/O2",
-            ]
+            extra_compile_args = ["/O2"]
         else:  # UNIX-based systems
-            extra_compile_args = [
-                "-O3",
-            ]
+            extra_compile_args = ["-O3"]
 
         package_path = "pyiceberg"
 
         extension = Extension(
-            # Your .pyx file will be available to cpython at this location.
             name="pyiceberg.avro.decoder_fast",
-            sources=[
-                os.path.join(package_path, "avro", "decoder_fast.pyx"),
-            ],
+            sources=[os.path.join(package_path, "avro", "decoder_fast.pyx")],
             extra_compile_args=extra_compile_args,
             language="c",
         )
@@ -64,20 +65,25 @@ class BuildHook(BuildHookInterface):
         dist = Distribution({"ext_modules": ext_modules})
         cmd = build_ext(dist)
         cmd.ensure_finalized()
-
         cmd.run()
 
+        artifacts: list[Path] = []
+
         for output in cmd.get_outputs():
-            output = Path(output)
-            relative_extension = output.relative_to(cmd.build_lib)
-            shutil.copyfile(output, relative_extension)
+            output_path = Path(output)
+            relative_extension = output_path.relative_to(cmd.build_lib)
+            shutil.copyfile(output_path, relative_extension)
+            artifacts.append(relative_extension)
+
+        return artifacts
 
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
         try:
-            self.build_cython_extensions()
-            # only set if Cython build succeeds
-            build_data["pure_python"] = False
-            build_data["infer_tag"] = True
+            artifacts = self.build_cython_extensions()
+            if artifacts:
+                build_data.setdefault("artifacts", []).extend(str(path) for path in artifacts)
+                build_data["pure_python"] = False
+                build_data["infer_tag"] = True
         except Exception:
             if not allowed_to_fail:
                 raise

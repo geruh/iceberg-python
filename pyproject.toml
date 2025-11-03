@@ -23,7 +23,6 @@ requires-python = ">=3.10.0,<4.0.0"
 readme = "README.md"
 license = "Apache-2.0"
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -138,42 +137,12 @@ default-groups = [
     "docs",
 ]
 
-[tool.hatch.build.targets.sdist]
-pure-python = false
-include = [
-    "pyiceberg",
-    "vendor/fb303",
-    "vendor/hive_metastore",
-    "tests",
-    "Makefile",
-    "NOTICE",
-    "dev",
-    "build-module.py"
-]
-
-[tool.hatch.build.targets.wheel]
-include = [
-    "pyiceberg",
-    "vendor/fb303",
-    "vendor/hive_metastore",
-    "NOTICE",
-    "pyiceberg/**/*.so",
-    "pyiceberg/**/*.pyd",
-]
-
-[tool.hatch.build.targets.wheel.sources]
-"vendor/fb303" = "fb303"
-"vendor/hive_metastore" = "hive_metastore"
-
-[tool.hatch.build.hooks.custom]
-path = "build-module.py"
-
 [build-system]
-requires = ["hatchling", "Cython>=3.0.0", "setuptools", "wheel"]
-build-backend = "hatchling.build"
+requires = ["setuptools", "wheel", "Cython>=3.0.0"]
+build-backend = "setuptools.build_meta"
 
 [[tool.mypy.overrides]]
-module = "pytest_mock.*"
+module = "pytest_mocks.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

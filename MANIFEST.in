@@ -24,13 +24,13 @@ include pyproject.toml
 include setup.py
 include uv.lock
 
-# Include Cython source files
-recursive-include pyiceberg *.pyx *.pxd *.pyi
+# Cython source files
+recursive-include pyiceberg *.pyx *.pyi
 
-# Include vendor packages
+# vendor packages
 recursive-include vendor *
 
-# Include type stubs
+# type stubs
 include pyiceberg/py.typed
 
 # Include test files in sdist
@@ -48,3 +48,4 @@ global-exclude __pycache__
 prune .venv
 prune build
 prune dist
+prune *.egg-info
