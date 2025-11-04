@@ -20,11 +20,16 @@ ENV AWS_SDK_BUNDLE=1.12.753
 
 USER root
 
-# Download AWS JARs needed for S3 support
-RUN curl -fsSL https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/${HADOOP_VERSION}/hadoop-aws-${HADOOP_VERSION}.jar \
-    -o /opt/hive/lib/hadoop-aws-${HADOOP_VERSION}.jar && \
+# Install curl and download AWS JARs needed for S3 support
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends curl && \
+    curl -fsSL https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/${HADOOP_VERSION}/hadoop-aws-${HADOOP_VERSION}.jar \
+        -o /opt/hive/lib/hadoop-aws-${HADOOP_VERSION}.jar && \
     curl -fsSL https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/${AWS_SDK_BUNDLE}/aws-java-sdk-bundle-${AWS_SDK_BUNDLE}.jar \
-    -o /opt/hive/lib/aws-java-sdk-bundle-${AWS_SDK_BUNDLE}.jar
+        -o /opt/hive/lib/aws-java-sdk-bundle-${AWS_SDK_BUNDLE}.jar && \
+    apt-get remove -y curl && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY core-site.xml /opt/hadoop/etc/hadoop/core-site.xml
 
