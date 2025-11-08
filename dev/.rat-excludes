@@ -3,5 +3,10 @@
 build
 .git
 .gitignore
-poetry.lock
+uv.lock
 mkdocs/*
+.venv/.*
+.*\.egg-info.*
+.*\.pytest_cache.*
+setup.cfg
+pyiceberg\.egg-info/.*
