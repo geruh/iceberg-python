@@ -1159,6 +1159,22 @@ class Table:
         Returns:
             A DataScan based on the table's current metadata.
         """
+        from pyiceberg.catalog.rest import RestCatalog
+
+        if isinstance(self.catalog, RestCatalog) and self.catalog.is_rest_scan_planning_enabled():
+            return RESTDataScan(
+                table=self,
+                table_metadata=self.metadata,
+                io=self.io,
+                catalog=self.catalog,
+                row_filter=row_filter,
+                selected_fields=selected_fields,
+                case_sensitive=case_sensitive,
+                snapshot_id=snapshot_id,
+                options=options,
+                limit=limit,
+            )
+
         return DataScan(
             table_metadata=self.metadata,
             io=self.io,
@@ -2116,6 +2132,93 @@ class DataScan(TableScan):
                 tbl = arrow_scan.to_table([task])
                 res += len(tbl)
         return res
+
+
+class RESTDataScan(DataScan):
+    """
+    temporarily based on https://github.com/apache/iceberg/pull/13400/
+    """
+
+    table: Table
+    catalog: Catalog
+
+    def __init__(
+        self,
+        table: Table,
+        table_metadata: TableMetadata,
+        io: FileIO,
+        catalog: Catalog,
+        row_filter: str | BooleanExpression = ALWAYS_TRUE,
+        selected_fields: tuple[str, ...] = ("*",),
+        case_sensitive: bool = True,
+        snapshot_id: int | None = None,
+        options: Properties = EMPTY_DICT,
+        limit: int | None = None,
+    ):
+        super().__init__(
+            table_metadata=table_metadata,
+            io=io,
+            row_filter=row_filter,
+            selected_fields=selected_fields,
+            case_sensitive=case_sensitive,
+            snapshot_id=snapshot_id,
+            options=options,
+            limit=limit,
+        )
+        self.table = table
+        self.catalog = catalog
+
+    def plan_files(self) -> Iterable[FileScanTask]:
+        from json import dumps
+
+        from requests import HTTPError
+
+        from pyiceberg.catalog.rest import Endpoints, RestCatalog
+        from pyiceberg.exceptions import NoSuchTableError
+        from pyiceberg.rest.models import PlanTableScanRequest, PlanTableScanResponse
+
+        if not isinstance(self.catalog, RestCatalog):
+            raise TypeError(f"Expected RestCatalog, instead got {type(self.catalog)}")
+
+        effective_snapshot_id = self.snapshot_id
+        if effective_snapshot_id is None:
+            snapshot = self.snapshot()
+            if snapshot is None:
+                return []
+            effective_snapshot_id = snapshot.snapshot_id
+
+        request = PlanTableScanRequest(
+            snapshot_id=effective_snapshot_id,
+            select=list(self.selected_fields) if self.selected_fields != ("*",) else None,
+            case_sensitive=self.case_sensitive,
+            # TODO: iceberg core only allows for string filters??
+            filter=dumps(self.row_filter),
+        )
+
+        try:
+            # can move this to the catalog for request control
+            response = self.catalog._session.post(
+                url=self.catalog.url(
+                    Endpoints.plan_table_scan,
+                    prefixed=True,
+                    **self.catalog._split_identifier_for_path(self.table._identifier),
+                ),
+                json=request.model_dump(by_alias=True, exclude_none=True),
+            )
+            response.raise_for_status()
+        except HTTPError as exc:
+            from pyiceberg.catalog.rest.response import _handle_non_200_response
+
+            _handle_non_200_response(exc, {404: NoSuchTableError})
+            raise
+
+        scan_response = PlanTableScanResponse.model_validate_json(response.content)
+
+        return scan_response.to_file_scan_tasks(
+            schema=self.table.schema(),
+            partition_specs=self.table.specs(),
+            table_format_version=self.table.format_version,
+        )
 
 
 @dataclass(frozen=True)

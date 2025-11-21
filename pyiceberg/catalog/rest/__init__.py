@@ -96,6 +96,7 @@ class Endpoints:
     list_views: str = "namespaces/{namespace}/views"
     drop_view: str = "namespaces/{namespace}/views/{view}"
     view_exists: str = "namespaces/{namespace}/views/{view}"
+    plan_table_scan: str = "namespaces/{namespace}/tables/{table}/plan"
 
 
 class IdentifierKind(Enum):
@@ -128,6 +129,7 @@ SIGV4_REGION = "rest.signing-region"
 SIGV4_SERVICE = "rest.signing-name"
 OAUTH2_SERVER_URI = "oauth2-server-uri"
 SNAPSHOT_LOADING_MODE = "snapshot-loading-mode"
+REST_SCAN_PLANNING_ENABLED = "rest-scan-planning-enabled"
 AUTH = "auth"
 CUSTOM = "custom"
 
@@ -228,6 +230,10 @@ class RestCatalog(Catalog):
         self.uri = properties[URI]
         self._fetch_config()
         self._session = self._create_session()
+
+    def is_rest_scan_planning_enabled(self) -> bool:
+
+        return property_as_bool(self.properties, REST_SCAN_PLANNING_ENABLED, False)
 
     def _create_session(self) -> Session:
         """Create a request session with provided catalog configuration."""
