@@ -237,11 +237,18 @@ class Reference(UnboundTerm, IcebergRootModel[str]):
         return BoundReference
 
 
-class And(BooleanExpression):
+class And(IcebergBaseModel, BooleanExpression):
     """AND operation expression - logical conjunction."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: TypingLiteral["and"] = Field(default="and", alias="type")
     left: BooleanExpression
     right: BooleanExpression
+
+    def __init__(self, left: BooleanExpression, right: BooleanExpression) -> None:
+        if isinstance(self, And) and not hasattr(self, "left") and not hasattr(self, "right"):
+            super().__init__(left=left, right=right)
 
     def __new__(cls, left: BooleanExpression, right: BooleanExpression, *rest: BooleanExpression) -> BooleanExpression:  # type: ignore
         if rest:
@@ -253,10 +260,7 @@ class And(BooleanExpression):
         elif right is AlwaysTrue():
             return left
         else:
-            obj = super().__new__(cls)
-            obj.left = left
-            obj.right = right
-            return obj
+            return super().__new__(cls)
 
     def __eq__(self, other: Any) -> bool:
         """Return the equality of two instances of the And class."""
@@ -596,11 +600,11 @@ class SetPredicate(IcebergBaseModel, UnboundPredicate, ABC):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     type: TypingLiteral["in", "not-in"] = Field(default="in")
-    literals: set[LiteralValue] = Field(alias="items")
+    literals: set[LiteralValue] = Field(alias="values")
 
     def __init__(self, term: str | UnboundTerm, literals: Iterable[Any] | Iterable[LiteralValue]):
         literal_set = _to_literal_set(literals)
-        super().__init__(term=_to_unbound_term(term), items=literal_set)  # type: ignore
+        super().__init__(term=_to_unbound_term(term), values=literal_set)  # type: ignore
         object.__setattr__(self, "literals", literal_set)
 
     def bind(self, schema: Schema, case_sensitive: bool = True) -> BoundSetPredicate:
