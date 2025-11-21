@@ -1786,8 +1786,6 @@ class FileScanTask(ScanTask):
 
     file: DataFile
     delete_files: set[DataFile]
-    start: int
-    length: int
     residual: BooleanExpression
 
     def __init__(
@@ -1800,8 +1798,6 @@ class FileScanTask(ScanTask):
     ) -> None:
         self.file = data_file
         self.delete_files = delete_files or set()
-        self.start = start or 0
-        self.length = length or data_file.file_size_in_bytes
         self.residual = residual
 
 
