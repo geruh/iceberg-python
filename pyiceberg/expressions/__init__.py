@@ -20,10 +20,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from functools import cached_property
-from typing import Any
+from typing import Any, TypeAlias
 from typing import Literal as TypingLiteral
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, SerializeAsAny, model_validator
 from pydantic_core.core_schema import ValidatorFunctionWrapHandler
 
 from pyiceberg.expressions.literals import AboveMax, BelowMin, Literal, literal
@@ -73,9 +73,13 @@ class BooleanExpression(IcebergBaseModel, ABC):
     @classmethod
     def handle_primitive_type(cls, v: Any, handler: ValidatorFunctionWrapHandler) -> BooleanExpression:
         """Apply custom deserialization logic before validation."""
+        # Already a BooleanExpression? return as-is so we keep the concrete subclass.
+        if isinstance(v, BooleanExpression):
+            return v
+
         # Handle different input formats
         if isinstance(v, bool):
-            return AlwaysTrue() if v else AlwaysFalse()
+            return AlwaysTrue() if v is True else AlwaysFalse()
 
         if isinstance(v, dict) and (field_type := v.get("type")):
             # Unary
@@ -113,15 +117,17 @@ class BooleanExpression(IcebergBaseModel, ABC):
                 return NotIn(**v)
 
             # Other
-            # elif field_type == "and":
-            # WIP: https://github.com/apache/iceberg-python/pull/2560
-            # return And(**v)
+            elif field_type == "and":
+                return And(**v)
             elif field_type == "or":
                 return Or(**v)
             elif field_type == "not":
                 return Not(**v)
 
         return handler(v)
+
+
+SerializableBooleanExpression: TypeAlias = SerializeAsAny["BooleanExpression"]
 
 
 def _build_balanced_tree(
@@ -291,20 +297,20 @@ class Reference(UnboundTerm, IcebergRootModel[str]):
         return BoundReference
 
 
-class And(IcebergBaseModel, BooleanExpression):
+class And(BooleanExpression):
     """AND operation expression - logical conjunction."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     type: TypingLiteral["and"] = Field(default="and", alias="type")
-    left: BooleanExpression
-    right: BooleanExpression
+    left: SerializableBooleanExpression = Field()
+    right: SerializableBooleanExpression = Field()
 
-    def __init__(self, left: BooleanExpression, right: BooleanExpression, *rest: BooleanExpression) -> None:
+    def __init__(self, left: BooleanExpression, right: BooleanExpression, *rest: BooleanExpression, **_: Any) -> None:
         if isinstance(self, And) and not hasattr(self, "left") and not hasattr(self, "right"):
             super().__init__(left=left, right=right)
 
-    def __new__(cls, left: BooleanExpression, right: BooleanExpression, *rest: BooleanExpression) -> BooleanExpression:  # type: ignore
+    def __new__(cls, left: BooleanExpression, right: BooleanExpression, *rest: BooleanExpression, **_: Any) -> BooleanExpression:
         if rest:
             return _build_balanced_tree(And, (left, right, *rest))
         if left is AlwaysFalse() or right is AlwaysFalse():
@@ -314,8 +320,7 @@ class And(IcebergBaseModel, BooleanExpression):
         elif right is AlwaysTrue():
             return left
         else:
-            obj = super().__new__(cls)
-            return obj
+            return super().__new__(cls)
 
     def __eq__(self, other: Any) -> bool:
         """Return the equality of two instances of the And class."""
@@ -345,14 +350,14 @@ class Or(BooleanExpression):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     type: TypingLiteral["or"] = Field(default="or", alias="type")
-    left: BooleanExpression
-    right: BooleanExpression
+    left: SerializableBooleanExpression = Field()
+    right: SerializableBooleanExpression = Field()
 
-    def __init__(self, left: BooleanExpression, right: BooleanExpression, *rest: BooleanExpression) -> None:
+    def __init__(self, left: BooleanExpression, right: BooleanExpression, *rest: BooleanExpression, **_: Any) -> None:
         if isinstance(self, Or) and not hasattr(self, "left") and not hasattr(self, "right"):
             super().__init__(left=left, right=right)
 
-    def __new__(cls, left: BooleanExpression, right: BooleanExpression, *rest: BooleanExpression) -> BooleanExpression:
+    def __new__(cls, left: BooleanExpression, right: BooleanExpression, *rest: BooleanExpression, **_: Any) -> BooleanExpression:
         if rest:
             return _build_balanced_tree(Or, (left, right, *rest))
         if left is AlwaysTrue() or right is AlwaysTrue():
@@ -362,8 +367,7 @@ class Or(BooleanExpression):
         elif right is AlwaysFalse():
             return left
         else:
-            obj = super().__new__(cls)
-            return obj
+            return super().__new__(cls)
 
     def __str__(self) -> str:
         """Return the string representation of the Or class."""
@@ -393,7 +397,7 @@ class Not(BooleanExpression):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     type: TypingLiteral["not"] = Field(default="not")
-    child: BooleanExpression = Field()
+    child: SerializableBooleanExpression = Field()
 
     def __init__(self, child: BooleanExpression, **_: Any) -> None:
         super().__init__(child=child)
@@ -405,8 +409,8 @@ class Not(BooleanExpression):
             return AlwaysTrue()
         elif isinstance(child, Not):
             return child.child
-        obj = super().__new__(cls)
-        return obj
+        else:
+            return super().__new__(cls)
 
     def __str__(self) -> str:
         """Return the string representation of the Not class."""
@@ -478,6 +482,10 @@ class BoundPredicate(Bound, BooleanExpression, ABC):
         if isinstance(other, self.__class__):
             return self.term == other.term
         return False
+
+    def __str__(self) -> str:
+        """Return the string representation of the BoundPredicate class."""
+        return f"{self.__class__.__name__}(term={str(self.term)})"
 
     @property
     @abstractmethod
@@ -906,6 +914,10 @@ class BoundLiteralPredicate(BoundPredicate, ABC):
         if isinstance(other, self.__class__):
             return self.term == other.term and self.literal == other.literal
         return False
+
+    def __str__(self) -> str:
+        """Return the string representation of the BoundLiteralPredicate class."""
+        return f"{self.__class__.__name__}(term={str(self.term)}, literal={repr(self.literal)})"
 
     def __repr__(self) -> str:
         """Return the string representation of the BoundLiteralPredicate class."""

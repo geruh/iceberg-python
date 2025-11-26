@@ -727,11 +727,10 @@ def test_and() -> None:
 
 def test_and_serialization() -> None:
     expr = And(EqualTo("x", 1), GreaterThan("y", 2))
+    json_repr = '{"type":"and","left":{"term":"x","type":"eq","value":1},"right":{"term":"y","type":"gt","value":2}}'
 
-    assert (
-        expr.model_dump_json()
-        == '{"type":"and","left":{"term":"x","type":"eq","value":1},"right":{"term":"y","type":"gt","value":2}}'
-    )
+    assert expr.model_dump_json() == json_repr
+    assert BooleanExpression.model_validate_json(json_repr) == expr
 
 
 def test_or() -> None:
@@ -789,7 +788,7 @@ def test_always_true() -> None:
 def test_always_false() -> None:
     always_false = AlwaysFalse()
     assert always_false.model_dump_json() == "false"
-    assert BooleanExpression.model_validate_json("true") == always_false
+    assert BooleanExpression.model_validate_json("false") == always_false
     assert str(always_false) == "AlwaysFalse()"
     assert repr(always_false) == "AlwaysFalse()"
     assert always_false == eval(repr(always_false))
@@ -838,7 +837,7 @@ def test_not_null() -> None:
     assert non_null == eval(repr(non_null))
     assert non_null == pickle.loads(pickle.dumps(non_null))
     pred = NotNull(term="foo")
-    json_repr = '{"term":"foo","type":"is-null"}'
+    json_repr = '{"term":"foo","type":"not-null"}'
     assert pred.model_dump_json() == json_repr
     assert BooleanExpression.model_validate_json(json_repr) == pred
 
@@ -924,8 +923,9 @@ def test_in() -> None:
 def test_not_in() -> None:
     ref = Reference("a")
     not_in = NotIn(ref, ["a", "b", "c"])
-    json_repr = '{"term":"a","type":"not-in","items":["a","b","c"]}'
-    assert not_in.model_dump_json() == json_repr
+    json_repr = not_in.model_dump_json()
+    assert not_in.model_dump_json().startswith('{"term":"a","type":"not-in","values":')
+    assert BooleanExpression.model_validate_json(json_repr) == not_in
     assert str(not_in) == f"NotIn({str(ref)}, {{a, b, c}})"
     assert repr(not_in) == f"NotIn({repr(ref)}, {{literal('a'), literal('b'), literal('c')}})"
     assert not_in == eval(repr(not_in))
