@@ -18,13 +18,12 @@ from __future__ import annotations
 
 import binascii
 from base64 import b64decode
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from pydantic import Field, field_validator
 
-from pyiceberg.expressions import BooleanExpression
 from pyiceberg.manifest import DEFAULT_READ_VERSION, DataFile, DataFileContent, FileFormat, TableVersion
 from pyiceberg.partitioning import PartitionSpec
 from pyiceberg.schema import Schema
@@ -41,7 +40,7 @@ class PlanStatus(str, Enum):
 
 def _parse_key_value_map(value: Any, converter: Callable[[Any], Any] | None = None) -> dict[int, Any] | None:
     """
-    Parse Iceberg map format of seperated key-value pairs.
+    Parse Iceberg map format of separated key-value pairs.
     format {"keys": [1,2], "values": [a,b]} to {1: a, 2: b}.
     """
     if value is None:
@@ -141,10 +140,7 @@ class RestContentFile(IcebergBaseModel):
         if self.partition and partition_spec.fields:
             # Partition is sent as {field_id: value} dict
             values_by_field_id = {int(k): v for k, v in self.partition.items()}
-            partition_kwargs = {
-                field.name: values_by_field_id.get(field.field_id)
-                for field in partition_struct.fields
-            }
+            partition_kwargs = {field.name: values_by_field_id.get(field.field_id) for field in partition_struct.fields}
         partition_record = Record._bind(struct=partition_struct, **partition_kwargs)
 
         data_file = DataFile.from_args(
@@ -217,7 +213,7 @@ class PlanTableScanRequest(IcebergBaseModel):
 
 class PlanTableScanResponse(IcebergBaseModel):
     plan_id: str | None = Field(alias="plan-id", default=None)
-    plan_status: PlanStatus = Field(alias="plan-status")
+    status: PlanStatus = Field(alias="status")
     plan_tasks: list[str] = Field(alias="plan-tasks", default_factory=list)
     delete_files: list[RestContentFile] = Field(alias="delete-files", default_factory=list)
     file_scan_tasks: list[RestFileScanTask] = Field(alias="file-scan-tasks", default_factory=list)
@@ -229,10 +225,9 @@ class PlanTableScanResponse(IcebergBaseModel):
         partition_specs: Mapping[int, PartitionSpec],
         table_format_version: TableVersion = DEFAULT_READ_VERSION,
     ) -> list[FileScanTask]:
-        if self.plan_status != PlanStatus.COMPLETED:
+        if self.status != PlanStatus.COMPLETED:
             raise ValueError(
-                f"Cannot build file scan tasks for status {self.plan_status}. "
-                f"Only synchronous planning is supported."
+                f"Cannot build file scan tasks for status {self.plan_status}. Only synchronous planning is supported."
             )
 
         delete_file_list = [
@@ -256,7 +251,7 @@ class PlanTableScanResponse(IcebergBaseModel):
 
 
 class RestFileScanTasks(IcebergBaseModel):
-    plan_status: PlanStatus = Field(alias="plan-status")
+    status: PlanStatus = Field(default=PlanStatus.COMPLETED)
     plan_tasks: list[str] = Field(alias="plan-tasks", default_factory=list)
     delete_files: list[RestContentFile] = Field(alias="delete-files", default_factory=list)
     file_scan_tasks: list[RestFileScanTask] = Field(alias="file-scan-tasks", default_factory=list)
@@ -268,7 +263,6 @@ class RestFileScanTasks(IcebergBaseModel):
         partition_specs: Mapping[int, PartitionSpec],
         table_format_version: TableVersion = DEFAULT_READ_VERSION,
     ) -> list[FileScanTask]:
-
         if self.plan_status != PlanStatus.COMPLETED:
             raise ValueError(f"Cannot build file scan tasks for status {self.plan_status}")
 
