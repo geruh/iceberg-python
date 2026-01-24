@@ -387,21 +387,21 @@ class BigQueryMetastoreCatalog(MetastoreCatalog):
             parameters["uuid"] = str(table_metadata.table_uuid)
         parameters[METADATA_LOCATION_PROP] = metadata_file_location
         parameters[TABLE_TYPE_PROP] = ICEBERG_TABLE_TYPE_VALUE
-        parameters["EXTERNAL"] = True
+        parameters["EXTERNAL"] = "TRUE"
 
         # Add Hive-style basic statistics from snapshot metadata if it exists.
         snapshot = table_metadata.current_snapshot()
         if snapshot:
             summary = snapshot.summary
             if summary:
-                if summary.get(TOTAL_DATA_FILES):
-                    parameters["numFiles"] = summary.get(TOTAL_DATA_FILES)
+                if num_files := summary.get(TOTAL_DATA_FILES):
+                    parameters["numFiles"] = num_files
 
-                if summary.get(TOTAL_RECORDS):
-                    parameters["numRows"] = summary.get(TOTAL_RECORDS)
+                if num_rows := summary.get(TOTAL_RECORDS):
+                    parameters["numRows"] = num_rows
 
-                if summary.get(TOTAL_FILE_SIZE):
-                    parameters["totalSize"] = summary.get(TOTAL_FILE_SIZE)
+                if total_size := summary.get(TOTAL_FILE_SIZE):
+                    parameters["totalSize"] = total_size
 
         return parameters
 

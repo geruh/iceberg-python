@@ -183,7 +183,7 @@ class OAuth2TokenProvider:
             raise ValueError(
                 "The expiration time of the Token must be provided by the Server in the Access Token Response in `expires_in` field, or by the PyIceberg Client."
             )
-        self._expires_at = time.monotonic() + expires_in - self.refresh_margin
+        self._expires_at = int(time.monotonic() + expires_in - self.refresh_margin)
 
     def get_token(self) -> str:
         with self._lock:

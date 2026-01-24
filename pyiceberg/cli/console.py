@@ -42,7 +42,9 @@ def catch_exception() -> Callable:  # type: ignore
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                ctx: Context = click.get_current_context(silent=True)
+                ctx = click.get_current_context(silent=True)
+                if ctx is None:
+                    raise
                 _, output = _catalog_and_output(ctx)
                 output.exception(e)
                 ctx.exit(1)
