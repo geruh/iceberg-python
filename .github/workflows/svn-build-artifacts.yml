@@ -50,6 +50,10 @@ jobs:
       - name: Install UV
         uses: astral-sh/setup-uv@v7
 
+      - name: Set up QEMU
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: docker/setup-qemu-action@v3
+
       # Publish the source distribution with the version that's in
       # the repository, otherwise the tests will fail
       - name: Compile source distribution
@@ -63,8 +67,10 @@ jobs:
           config-file: "pyproject.toml"
         env:
           # Ignore 32 bit architectures
-          CIBW_ARCHS: "auto64"
+          CIBW_ARCHS: "auto64 aarch64"
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.10,<3.14"
+          CIBW_MUSLLINUX_X86_64_IMAGE: "musllinux_1_2"
+          CIBW_MUSLLINUX_AARCH64_IMAGE: "musllinux_1_2"
           CIBW_BEFORE_TEST: "uv sync --directory {project} --only-group dev --no-install-project"
           CIBW_TEST_COMMAND: "uv run --directory {project} pytest tests/avro/test_decoder.py"
           # Ignore tests for pypy since not all dependencies are compiled for it
