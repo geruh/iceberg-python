@@ -32,7 +32,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        os: [ ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest ]
 
     steps:
       - uses: actions/checkout@v6
@@ -50,15 +50,11 @@ jobs:
       - name: Install UV
         uses: astral-sh/setup-uv@v7
 
-      - name: Set up QEMU
-        if: startsWith(matrix.os, 'ubuntu')
-        uses: docker/setup-qemu-action@v3
-
       # Publish the source distribution with the version that's in
       # the repository, otherwise the tests will fail
       - name: Compile source distribution
         run: uv build --sdist
-        if: startsWith(matrix.os, 'ubuntu')
+        if: matrix.os == 'ubuntu-latest'
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3.1
@@ -66,8 +62,7 @@ jobs:
           output-dir: wheelhouse
           config-file: "pyproject.toml"
         env:
-          # Ignore 32 bit architectures
-          CIBW_ARCHS: "auto64 aarch64"
+          CIBW_ARCHS: "auto64"
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.10,<3.14"
           CIBW_MUSLLINUX_X86_64_IMAGE: "musllinux_1_2"
           CIBW_MUSLLINUX_AARCH64_IMAGE: "musllinux_1_2"
@@ -80,7 +75,7 @@ jobs:
           CIBW_SKIP: "cp3*t-*"
 
       - name: Add source distribution
-        if: startsWith(matrix.os, 'ubuntu')
+        if: matrix.os == 'ubuntu-latest'
         run: ls -lah dist/* && cp dist/* wheelhouse/
 
       - uses: actions/upload-artifact@v4
