@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint: disable=redefined-outer-name,arguments-renamed,fixme
+from collections.abc import Iterator
 from tempfile import TemporaryDirectory
 
 import fastavro
@@ -31,7 +32,9 @@ from pyiceberg.manifest import (
     ManifestEntry,
     ManifestEntryStatus,
     ManifestFile,
+    ManifestWriter,
     PartitionFieldSummary,
+    RollingManifestWriter,
     _manifest_cache,
     _manifests,
     read_manifest_list,
@@ -932,3 +935,78 @@ def test_manifest_writer_tell(format_version: TableVersion) -> None:
             after_entry_bytes = writer.tell()
 
             assert after_entry_bytes > initial_bytes, "Bytes should increase after adding entry"
+
+
+@pytest.mark.parametrize("format_version", [1, 2])
+@pytest.mark.parametrize(
+    "target_file_size_in_bytes,num_entries,expected_number_of_files",
+    [
+        (1000000, 100, 1),  # Size threshold not reached, all in one file
+        (1, 500, 2),  # Size threshold exceeded, checked at entry 250 and 500
+    ],
+)
+def test_rolling_manifest_writer(
+    format_version: TableVersion,
+    target_file_size_in_bytes: int,
+    num_entries: int,
+    expected_number_of_files: int,
+) -> None:
+    with TemporaryDirectory() as tmpdir:
+        io = PyArrowFileIO({})
+        schema = Schema(NestedField(1, "id", IntegerType(), required=True))
+
+        def supplier() -> Iterator[ManifestWriter]:
+            i = 0
+            while True:
+                output = io.new_output(f"{tmpdir}/manifest-{i}.avro")
+                yield write_manifest(
+                    format_version=format_version,
+                    spec=UNPARTITIONED_PARTITION_SPEC,
+                    schema=schema,
+                    output_file=output,
+                    snapshot_id=1,
+                    avro_compression="null",
+                )
+                i += 1
+
+        entries = []
+        for i in range(num_entries):
+            data_file = DataFile.from_args(
+                content=DataFileContent.DATA,
+                file_path=f"s3://bucket/data-{i}.parquet",
+                file_format=FileFormat.PARQUET,
+                partition=Record(),
+                record_count=1,
+                file_size_in_bytes=1000,
+            )
+            entries.append(
+                ManifestEntry.from_args(
+                    status=ManifestEntryStatus.ADDED,
+                    snapshot_id=1,
+                    data_sequence_number=1,
+                    file_sequence_number=1,
+                    data_file=data_file,
+                )
+            )
+
+        with RollingManifestWriter(
+            supplier=supplier(),
+            target_file_size_in_bytes=target_file_size_in_bytes,
+        ) as writer:
+            for entry in entries:
+                writer.add_entry(entry)
+
+        manifest_files = writer.to_manifest_files()
+        assert len(manifest_files) == expected_number_of_files
+
+        with pytest.raises(RuntimeError, match="Cannot add entry to closed"):
+            writer.add_entry(entries[0])
+
+
+def test_rolling_manifest_writer_empty_supplier() -> None:
+    with pytest.raises(RuntimeError, match="Manifest writer supplier exhausted"):
+        with RollingManifestWriter(
+            supplier=iter([]),
+            target_file_size_in_bytes=1000,
+        ):
+            pass
